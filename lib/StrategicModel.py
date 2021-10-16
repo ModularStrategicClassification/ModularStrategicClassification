@@ -16,7 +16,7 @@ from torch.utils.data import DataLoader, TensorDataset
 
 import lib.CommonDefinitions as Commons
 from lib.ResponseMapping import ResponseMapping
-import lib.SocialMeasures
+import lib.SocialMeasures as SocialMeasures
 
 
 class StrategicModel(Module):
@@ -28,6 +28,8 @@ class StrategicModel(Module):
     def __init__(self, x_dim: int, batch_size: int, loss_fn: Callable = Commons.hinge_loss,
                  cost_fn: Union[str, Callable] = "quad", cost_fn_not_batched: Optional[Callable] = None,
                  cost_fn_torch: Optional[Callable] = None, cost_const_kwargs: Dict = None,
+                 nonlinear_transformation_indices: Optional[List[int]] = None,
+                 nonlinear_transformation_fn: Optional[Callable] = None, nonlinear_transformation_output_dimension: int = -1,
                  utility_reg: Optional[float] = None, burden_reg: Optional[float] = None, recourse_reg: Optional[float] = None,
                  social_measure_dict: Dict = None, train_slope: float = Commons.TRAIN_SLOPE,
                  eval_slope: float = Commons.EVAL_SLOPE, x_lower_bound: float = Commons.X_LOWER_BOUND,
@@ -43,6 +45,9 @@ class StrategicModel(Module):
         :param cost_fn_not_batched: The gaming cost function (for non-batched user data, cvxpy version).
         :param cost_fn_torch: The gaming cost function (for batched user data, torch version).
         :param cost_const_kwargs: Constant keyword arguments which should be passed to the cost function on computation.
+        :param nonlinear_transformation_indices: The indices to which we apply the nonlinear transformation function.
+        :param nonlinear_transformation_fn: The nonlinear transformation function.
+        :param nonlinear_transformation_output_dimension: The output dimension of the nonlinear transformation function.
         :param utility_reg: Regularization for the utility social measure.
         :param burden_reg: Regularization for the burden social measure.
         :param recourse_reg: Regularization for the recourse social measure.
@@ -96,19 +101,60 @@ class StrategicModel(Module):
             cost_fn_not_batched = cost_fn_dict.get("cvxpy_not_batched")
             cost_fn_torch = cost_fn_dict.get("torch")
 
+        # Manage the linear and nonlinear parts of the score function.
+        if nonlinear_transformation_indices is None:
+            nonlinear_transformation_indices = []
+            if nonlinear_transformation_fn is not None:
+                warning_message = "User supplied the strategic model with a nonlinear transformation but didn't specify its" \
+                                  "domain (on which indices it applies). Ignoring the supplied nonlinear transformation."
+                warnings.warn(warning_message)
+            if nonlinear_transformation_output_dimension > 0:
+                warning_message = "User supplied the strategic model with a nonlinear transformation output dimension but " \
+                                  "didn't specify its domain (on which indices it applies). Ignoring the supplied nonlinear " \
+                                  "transformation output dimension."
+                warnings.warn(warning_message)
+
+        self.nonlinear_indices = nonlinear_transformation_indices
+        self.linear_indices = [i for i in range(x_dim) if i not in nonlinear_transformation_indices]
+
+        x_dim_linear = len(self.linear_indices)
+        if x_dim_linear == 0:
+            error_message = "The strategic model does not allow a nonlinear transformation to be applied on all of the input."
+            raise ValueError(error_message)
+
+        # If the user does not supply the output dimension of the nonlinear transformation, we assume that the output is of the
+        # same size as the input.
+        if nonlinear_transformation_output_dimension > 0:
+            if nonlinear_transformation_fn is None:
+                error_message = "User supplied indices to apply a nonlinear transformation, but didn't supply the nonlinear" \
+                                "transformation."
+                raise ValueError(error_message)
+            x_dim_nonlinear = nonlinear_transformation_output_dimension
+        else:
+            x_dim_nonlinear = len(self.nonlinear_indices)
+
+        self.x_dim_linear = x_dim_linear
+        self.x_dim_nonlinear = x_dim_nonlinear
+        self.nonlinear_transformation_fn = nonlinear_transformation_fn
+
         # The model's parameters
-        self.w = Parameter(math.sqrt(1 / x_dim) * (1 - 2 * torch.rand(x_dim, dtype=torch.float64, requires_grad=True)))
+        self.w = Parameter(math.sqrt(1 / x_dim_linear) * (1 - 2 * torch.rand(x_dim_linear, dtype=torch.float64,
+                                                                             requires_grad=True)))
         self.b = Parameter(1 - 2 * torch.rand(1, dtype=torch.float64, requires_grad=True))
+        if x_dim_nonlinear > 0:
+            self.w_nonlinear = Parameter(math.sqrt(1 / x_dim_nonlinear) * (1 - 2 * torch.rand(x_dim_nonlinear,
+                                                                                              dtype=torch.float64,
+                                                                                              requires_grad=True)))
 
         # If the user does not supply a non-batched cost function, we wrap the batched cost function to create it.
         if cost_fn_not_batched is None:
             def cost_no_batch(x, r, **kwargs):
-                return cost_fn(cp.reshape(x, (1, x_dim)), cp.reshape(r, (1, x_dim)), **kwargs)
+                return cost_fn(cp.reshape(x, (1, x_dim_linear)), cp.reshape(r, (1, x_dim_linear)), **kwargs)
 
             cost_fn_not_batched = cost_no_batch
 
         # Create the response mapping.
-        self.response_mapping = ResponseMapping(x_dim, batch_size, cost_fn, cost_fn_not_batched, cost_const_kwargs,
+        self.response_mapping = ResponseMapping(x_dim_linear, batch_size, cost_fn, cost_fn_not_batched, cost_const_kwargs,
                                                 train_slope, eval_slope, x_lower_bound, x_upper_bound, diff_threshold,
                                                 iteration_cap)
 
@@ -182,7 +228,8 @@ class StrategicModel(Module):
         :param requires_grad: Whether the results should track gradients w.r.t the model's parameters.
         :return: The optimal response for X w.r.t the current model parameters.
         """
-        return self.response_mapping.optimize_X(X, self.w, self.b, requires_grad=requires_grad)
+        nonlinear_score = self.nonlinear_score(X)
+        return self.response_mapping.optimize_X(X, self.w, self.b, nonlinear_score, requires_grad=requires_grad)
 
     def score(self, X: tensor) -> tensor:
         """
@@ -190,7 +237,18 @@ class StrategicModel(Module):
         :param X: The input to calculate its score.
         :return: The score of X.
         """
-        return Commons.score(X, self.w, self.b)
+        return Commons.score(X, self.w, self.b, self.nonlinear_score(X))
+
+    def nonlinear_score(self, X: tensor) -> tensor:
+        """
+        Computes the nonlinear part of the score of the given input.
+        :param X: The input to calculate its nonlinear score.
+        :return: The nonlinear score of X.
+        """
+        if self.nonlinear_transformation_fn is not None:
+            return self.nonlinear_transformation_fn(X[:, self.nonlinear_indices]) @ self.w_nonlinear
+        else:
+            return torch.zeros(len(X))
 
     def loss(self, Y: tensor, Y_pred: tensor, X: tensor, X_opt: tensor) -> tensor:
         """
@@ -515,16 +573,20 @@ class StrategicModel(Module):
         :param Y_pred: The model's prediction of the users' classes.
         :return: The data in the saving format.
         """
-        w_dict = {f"w_{j}": self.w[j].detach().numpy() for j in range(self.linear_x_dim)}
+        w_dict = {f"w_{j}": self.w[j].detach().numpy() for j in range(len(self.w))}
+        if self.nonlinear_transformation_fn is not None:
+            w_nonlinear_dict = {f"w_nonlinear_{j}": self.w_nonlinear[j].detach().numpy() for j in range(len(self.w_nonlinear))}
+        else:
+            w_nonlinear_dict = {}
 
         def x_dict(row):
-            return {f"x_{j}": X[row][j].detach().numpy() for j in range(self.x_dim)}
+            return {f"x_{j}": X[row][j].detach().numpy() for j in range(len(X[row]))}
 
         def x_opt_dict(row):
-            return {f"x_opt_{j}": X_opt[row][j].detach().numpy() for j in range(self.x_dim)}
+            return {f"x_opt_{j}": X_opt[row][j].detach().numpy() for j in range(len(X_opt[row]))}
 
         return [{"epoch": epoch, "batch": batch,
-                 **w_dict, "b": self.b[0].detach().numpy(),
+                 **w_dict, "b": self.b[0].detach().numpy(), **w_nonlinear_dict,
                  **x_dict(row), "y": Y[row].detach().numpy(),
                  **x_opt_dict(row), "y_pred": Y_pred[row].detach().numpy()} for row in range(len(X))]
 

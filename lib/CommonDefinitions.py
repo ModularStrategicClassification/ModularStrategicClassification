@@ -17,11 +17,13 @@ ITERATION_CAP = 100
 
 
 # Score function & derivative
-def score(x: Union[tensor, ndarray], w: Union[tensor, ndarray], b: Union[tensor, ndarray]) -> Union[tensor, ndarray]:
-    return x @ w + b
+def score(x: Union[tensor, ndarray], w: Union[tensor, ndarray], b: Union[tensor, ndarray],
+          nonlinear_score: Union[tensor, ndarray]) -> Union[tensor, ndarray]:
+    return x @ w + b + nonlinear_score
 
 
-def score_der(x: Union[tensor, ndarray], w: Union[tensor, ndarray], b: Union[tensor, ndarray]) -> Union[tensor, ndarray]:
+def score_der(x: Union[tensor, ndarray], w: Union[tensor, ndarray], b: Union[tensor, ndarray],
+              nonlinear_score: Union[tensor, ndarray]) -> Union[tensor, ndarray]:
     return w
 
 
@@ -73,68 +75,68 @@ recognized_cost_functions: Dict[str, Dict[str, any]] = {
 
 
 # f, g, f_der - cvxpy versions, not batched
-def f(x: ndarray, w: ndarray, b: ndarray, slope: float) -> ndarray:  # Unused.
-    z = score(x, w, b)
+def f(x: ndarray, w: ndarray, b: ndarray, nonlinear_score: ndarray, slope: float) -> ndarray:  # Unused.
+    z = score(x, w, b, nonlinear_score)
     return 0.5 * cp.norm(cp.hstack([1, (slope * z + 1)]), 2)
 
 
-def g(x: ndarray, w: ndarray, b: ndarray, slope: float) -> ndarray:
-    z = score(x, w, b)
+def g(x: ndarray, w: ndarray, b: ndarray, nonlinear_score: ndarray, slope: float) -> ndarray:
+    z = score(x, w, b, nonlinear_score)
     return 0.5 * cp.norm(cp.hstack([1, (slope * z - 1)]), 2)
 
 
-def f_der(x: ndarray, w: ndarray, b: ndarray, slope: float) -> ndarray:  # Unused.
-    z = score(x, w, b)
+def f_der(x: ndarray, w: ndarray, b: ndarray, nonlinear_score: ndarray, slope: float) -> ndarray:  # Unused.
+    z = score(x, w, b, nonlinear_score)
     return 0.5 * cp.multiply(slope * ((slope * z + 1) / cp.sqrt((slope * z + 1) ** 2 + 1)),
-                             score_der(x, w, b))
+                             score_der(x, w, b, nonlinear_score))
 
 
 # f, g, f_der - cvxpy versions, batched
-def f_batch(x: ndarray, w: ndarray, b: ndarray, slope: float) -> ndarray:  # Unused.
-    z = score(x, w, b)
+def f_batch(x: ndarray, w: ndarray, b: ndarray, nonlinear_score: ndarray, slope: float) -> ndarray:  # Unused.
+    z = score(x, w, b, nonlinear_score)
     return 0.5 * cp.norm(cp.vstack([np.ones(1, x.shape[0]), cp.reshape((slope * z + 1), (1, x.shape[0]))]), 2, axis=0)
 
 
-def g_batch(x: ndarray, w: ndarray, b: ndarray, slope: float) -> ndarray:
-    z = score(x, w, b)
+def g_batch(x: ndarray, w: ndarray, b: ndarray, nonlinear_score: ndarray, slope: float) -> ndarray:
+    z = score(x, w, b, nonlinear_score)
     return 0.5 * cp.norm(cp.vstack([np.ones((1, x.shape[0])), cp.reshape((slope * z - 1), (1, x.shape[0]))]), 2, axis=0)
 
 
-def f_der_batch(x: ndarray, w: ndarray, b: ndarray, slope: float) -> ndarray:  # Unused.
-    z = score(x, w, b)
+def f_der_batch(x: ndarray, w: ndarray, b: ndarray, nonlinear_score: ndarray, slope: float) -> ndarray:  # Unused.
+    z = score(x, w, b, nonlinear_score)
     der = 0.5 * slope * ((slope * z + 1) / cp.sqrt((slope * z + 1) ** 2 + 1))
-    return cp.reshape(der, (der.shape[0], 1)) @ cp.reshape(score_der(x, w, b), (1, x.shape[1]))
+    return cp.reshape(der, (der.shape[0], 1)) @ cp.reshape(score_der(x, w, b, nonlinear_score), (1, x.shape[1]))
 
 
 # f, g, f_der - torch versions
-def f_torch(x: tensor, w: tensor, b: tensor, slope: float) -> torch:  # Unused.
-    z = score(x, w, b)
+def f_torch(x: tensor, w: tensor, b: tensor, nonlinear_score: tensor, slope: float) -> torch:  # Unused.
+    z = score(x, w, b, nonlinear_score)
     return 0.5 * torch.sqrt((slope * z + 1) ** 2 + 1)
 
 
-def g_torch(x: tensor, w: tensor, b: tensor, slope: float) -> torch:  # Unused.
-    z = score(x, w, b)
+def g_torch(x: tensor, w: tensor, b: tensor, nonlinear_score: tensor, slope: float) -> torch:  # Unused.
+    z = score(x, w, b, nonlinear_score)
     return 0.5 * torch.sqrt((slope * z - 1) ** 2 + 1)
 
 
-def f_der_torch(x: tensor, w: tensor, b: tensor, slope: float) -> torch:
-    z = score(x, w, b)
+def f_der_torch(x: tensor, w: tensor, b: tensor, nonlinear_score: torch, slope: float) -> torch:
+    z = score(x, w, b, nonlinear_score)
     der = 0.5 * slope * ((slope * z + 1) / torch.sqrt((slope * z + 1) ** 2 + 1))
-    return der.unsqueeze(1) @ score_der(x, w, b).unsqueeze(0)
+    return der.unsqueeze(1) @ score_der(x, w, b, nonlinear_score).unsqueeze(0)
 
 
 # f, g, f_der - numpy versions
-def f_numpy(x: ndarray, w: ndarray, b: ndarray, slope: float) -> ndarray:  # Unused.
-    z = score(x, w, b)
+def f_numpy(x: ndarray, w: ndarray, b: ndarray, nonlinear_score: ndarray, slope: float) -> ndarray:  # Unused.
+    z = score(x, w, b, nonlinear_score)
     return 0.5 * np.sqrt((slope * z + 1) ** 2 + 1)
 
 
-def g_numpy(x: ndarray, w: ndarray, b: ndarray, slope: float) -> ndarray:  # Unused.
-    z = score(x, w, b)
+def g_numpy(x: ndarray, w: ndarray, b: ndarray, nonlinear_score: ndarray, slope: float) -> ndarray:  # Unused.
+    z = score(x, w, b, nonlinear_score)
     return 0.5 * np.sqrt((slope * z - 1) ** 2 + 1)
 
 
-def f_der_numpy(x: ndarray, w: ndarray, b: ndarray, slope: float) -> ndarray:
-    z = score(x, w, b)
+def f_der_numpy(x: ndarray, w: ndarray, b: ndarray, nonlinear_score: ndarray, slope: float) -> ndarray:
+    z = score(x, w, b, nonlinear_score)
     der = 0.5 * slope * ((slope * z + 1) / np.sqrt((slope * z + 1) ** 2 + 1))
-    return np.expand_dims(der, axis=1) @ np.expand_dims(score_der(x, w, b), axis=0)
+    return np.expand_dims(der, axis=1) @ np.expand_dims(score_der(x, w, b, nonlinear_score), axis=0)
