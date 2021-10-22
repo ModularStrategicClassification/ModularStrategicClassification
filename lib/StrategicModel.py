@@ -1,7 +1,7 @@
 import math
 import os
 import time
-from typing import Callable, Dict, List, Optional, Tuple, Type, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
 import warnings
 
 import cvxpy as cp
@@ -27,11 +27,11 @@ class StrategicModel(Module):
 
     def __init__(self, x_dim: int, batch_size: int, loss_fn: Callable = Commons.hinge_loss,
                  cost_fn: Union[str, Callable] = "quad", cost_fn_not_batched: Optional[Callable] = None,
-                 cost_fn_torch: Optional[Callable] = None, cost_const_kwargs: Dict[str, Any] = None,
+                 cost_fn_torch: Optional[Callable] = None, cost_const_kwargs: Optional[Dict[str, Any]] = None,
                  nonlinear_transformation_indices: Optional[List[int]] = None,
                  nonlinear_transformation_fn: Optional[Callable] = None, nonlinear_transformation_output_dimension: int = -1,
                  utility_reg: Optional[float] = None, burden_reg: Optional[float] = None, recourse_reg: Optional[float] = None,
-                 social_measure_dict: Dict = None, train_slope: float = Commons.TRAIN_SLOPE,
+                 social_measure_dict: Optional[Dict] = None, train_slope: float = Commons.TRAIN_SLOPE,
                  eval_slope: float = Commons.EVAL_SLOPE, x_lower_bound: float = Commons.X_LOWER_BOUND,
                  x_upper_bound: float = Commons.X_UPPER_BOUND, diff_threshold: float = Commons.DIFF_THRESHOLD,
                  iteration_cap: int = Commons.ITERATION_CAP, strategic: bool = True):
@@ -229,7 +229,7 @@ class StrategicModel(Module):
         :return: The optimal response for X w.r.t the current model parameters.
         """
         nonlinear_score = self.nonlinear_score(X)
-        X_opt_linear = self.response_mapping.optimize_X(X[self.linear_indices], self.w, self.b, nonlinear_score,
+        X_opt_linear = self.response_mapping.optimize_X(X[:, self.linear_indices], self.w, self.b, nonlinear_score,
                                                         requires_grad=requires_grad)
 
         X_opt = torch.clone(X)
@@ -567,8 +567,8 @@ class StrategicModel(Module):
         epoch_data = self.get_batch_data_for_saving(epoch + 1, batch + 1, X, X_opt, Y, Y_pred)
         DataFrame(epoch_data).to_csv(filename, mode="a", header=False, index=False)
 
-    def get_batch_data_for_saving(self, epoch: int, batch: int, X: tensor, X_opt: tensor, Y: tensor, Y_pred: tensor) -> \
-            List[Dict[str, float]]:
+    def get_batch_data_for_saving(self, epoch: int, batch: int, X: tensor, X_opt: tensor, Y: tensor,
+                                  Y_pred: tensor) -> List[Dict[str, float]]:
         """
         Returns the batch data in the saving format (dictionary of entries to save for each row in X, X_opt, etc.).
         :param epoch: The epoch number.
