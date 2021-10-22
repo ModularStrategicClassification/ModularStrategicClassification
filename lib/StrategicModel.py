@@ -21,13 +21,13 @@ import lib.SocialMeasures as SocialMeasures
 
 class StrategicModel(Module):
     """
-    The strategic model class, which learns a linear classifier that takes into account _gaming_ of users.
-    Users change their features to maximize their utility, which is defined to be gain - cost.
+    The strategic model class, which learns a linear classifier that takes into account *gaming* of users.
+    I.e. users change their features to maximize their utility, which is defined to be their gain minus the cost of the change.
     """
 
     def __init__(self, x_dim: int, batch_size: int, loss_fn: Callable = Commons.hinge_loss,
                  cost_fn: Union[str, Callable] = "quad", cost_fn_not_batched: Optional[Callable] = None,
-                 cost_fn_torch: Optional[Callable] = None, cost_const_kwargs: Dict = None,
+                 cost_fn_torch: Optional[Callable] = None, cost_const_kwargs: Dict[str, Any] = None,
                  nonlinear_transformation_indices: Optional[List[int]] = None,
                  nonlinear_transformation_fn: Optional[Callable] = None, nonlinear_transformation_output_dimension: int = -1,
                  utility_reg: Optional[float] = None, burden_reg: Optional[float] = None, recourse_reg: Optional[float] = None,
@@ -222,14 +222,19 @@ class StrategicModel(Module):
 
     def optimize_X(self, X: tensor, requires_grad: bool = True) -> tensor:
         """
-        Given the users' features X, returns the optimal X to which the users should move. Directly calls the response mapping's
-        optimize_X method.
+        Given the users' features X, returns the optimal X to which the users should move. Directly calls the response
+        mapping's optimize_X method.
         :param X: The users' features.
         :param requires_grad: Whether the results should track gradients w.r.t the model's parameters.
         :return: The optimal response for X w.r.t the current model parameters.
         """
         nonlinear_score = self.nonlinear_score(X)
-        return self.response_mapping.optimize_X(X, self.w, self.b, nonlinear_score, requires_grad=requires_grad)
+        X_opt_linear = self.response_mapping.optimize_X(X[self.linear_indices], self.w, self.b, nonlinear_score,
+                                                        requires_grad=requires_grad)
+
+        X_opt = torch.clone(X)
+        X_opt[:, self.linear_indices] = X_opt_linear
+        return X_opt
 
     def score(self, X: tensor) -> tensor:
         """
@@ -275,14 +280,15 @@ class StrategicModel(Module):
         :param Xval: The validation set.
         :param Yval: The validation labels.
         :param opt_class: The class of the optimizer used in the training.
-        :param opt_kwargs: Any keyword arguments to be passed to the optimizer.
+        :param opt_kwargs: Any keyword arguments to be passed to the optimizer. Default value: {"lr": 5e-1}.
         :param shuffle: Whether to shuffle the training and validation sets in the training.
         :param epochs: The amount of epochs to train the model.
         :param epochs_without_improvement_cap: The cap on the amount of epochs in which the model doesn't improve (i.e. doesn't
-            increase its accuracy).
+            increase its accuracy on the validation set).
         :param verbose: Whether to write messages during the training process. Set to "batches" to write at the end of every
-            batch, "epochs" to write at the end of every epoch, or None to only write at the end of the training process.
-        :param save_progress: Whether to save the progress of the model during training. One must supply a path and model_name
+            batch and epoch, "epochs" to write at the end of every epoch, or None to write only at the end of the training
+            process.
+        :param save_progress: Whether to save the progress of the model during training. One must supply path and model_name
             to save the model's progress.
         :param path: A path to a directory in which the model will be saved. Can be None, in this case, the model will not be
             saved to a file.
@@ -302,9 +308,9 @@ class StrategicModel(Module):
         for _, social_measure in self.social_measure_dict.items():
             social_measure.init_fit_train(epochs, verbose)
 
-        validation = (Xval is not None)
+        validation = Xval is not None
         if validation:
-            assert (Yval is not None)
+            assert Yval is not None
             validation_dataset = TensorDataset(Xval, Yval)
             validation_dataloader = DataLoader(validation_dataset, batch_size=self.batch_size, shuffle=shuffle)
             validation_losses = []
@@ -500,7 +506,7 @@ class StrategicModel(Module):
         loss = train_losses[epoch][batch]
         error = train_errors[epoch][batch]
 
-        print(f"  batch {batch + 1:03d} / {batches:03d} | loss: {loss:3.5f} | error: {error:3.5f}", end="")
+        print(f"  Ended batch {batch + 1:03d} / {batches:03d} | loss: {loss:3.5f} | error: {error:3.5f}", end="")
         for name, social_measure in self.social_measure_dict.items():
             sm_string = social_measure.get_batch_info(epoch, batch)
             if len(sm_string) > 0:
@@ -517,7 +523,7 @@ class StrategicModel(Module):
         :param validation_losses: The validation losses up to this point.
         :param validation_errors: The validation errors up to this point.
         """
-        print(f"epoch {epoch + 1:03d} / {epochs:03d} | time: {round(epoch_time):03d} sec", end="")
+        print(f"Ended epoch {epoch + 1:03d} / {epochs:03d} | time: {round(epoch_time):03d} sec", end="")
         if validation_losses is not None:
             loss = np.mean(validation_losses[epoch])
             error = np.mean(validation_errors[epoch])
